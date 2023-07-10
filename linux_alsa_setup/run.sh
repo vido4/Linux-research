@@ -1,0 +1,14 @@
+qemu-system-x86_64 \
+    -m 1G \
+    -nographic \
+    -kernel bzImage \
+    -append "console=ttyS0 loglevel=3 kpti=on nokaslr" \
+    -no-reboot \
+    -cpu qemu64,+smap,+smep \
+    -smp 2 \
+    -monitor /dev/null \
+    -initrd debugfs.cpio \
+    -net nic,model=virtio \
+    -net user \
+    -soundhw hda \
+    -s

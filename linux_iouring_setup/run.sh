@@ -1,0 +1,13 @@
+qemu-system-x86_64 \
+    -m 256M \
+    -nographic \
+    -kernel bzImage \
+    -append "console=ttyS0 loglevel=3 kpti=on kaslr trace_event=kmem:kmalloc,kmem:kmem_cache_alloc,kmem:kfree,kmem:kmem_cache_free" \
+    -no-reboot \
+    -cpu qemu64,+smap,+smep \
+    -smp 1 \
+    -monitor /dev/null \
+    -initrd debugfs.cpio \
+    -net nic,model=virtio \
+    -net user \
+    -s
