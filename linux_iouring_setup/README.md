@@ -13,3 +13,8 @@ I had some other condition in manipulating UAF victim object. Final result is re
 
 It could be improved to take into account some mitigations - I had disabled freelist randomisation and hardening (that one for trivial double-free abuse), but stability would most likely go down.
 Anyway it should be double not like any of mitigations would completely axe the exploit.
+
+Sometimes need multiple tries and can crash. Left tons of debug data so we properly can see leaks. Tried to prevent touching unallocated memory, so it can take more tries but should not crash so often (hopefully).
+![image](https://github.com/vido4/Linux-research/assets/5321740/33b01c0a-598e-4b49-9587-0776401a7cee)
+
+![image](https://github.com/vido4/Linux-research/assets/5321740/f29e3ebd-cc6e-4f8f-9889-30b5c80e3544)
