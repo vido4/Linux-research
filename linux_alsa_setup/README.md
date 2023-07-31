@@ -166,6 +166,8 @@ If we save it as `exploit.c` file, script `transfer.sh` takes care of compiling 
 
 We also get nice source code view because we are running it from Linux source code directory, so all sources are available.
 
+MAKE SURE that `/dev/snd/controlC0` has R/W permissions for everyone! Typical distros like Ubuntu do not have it setup like that, but allow users to read/write to that using extended attributes so this path should be achievable by unauthenticated users in most scanarios.
+
 ## Finding the issue
 Having the initial setup ready, we can go see how to trigger the issue. In the meantime, I spent lots of time reading every function from initialization of the control to all possible actions we can do. It was surely educational, but at the end I did not find any reasonable issue that way, so I went back into attempting to trigger the vulnerability.
 
