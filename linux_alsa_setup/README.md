@@ -1,4 +1,5 @@
-# Motivation
+# CVE-2023-0266
+## Motivation
 In my off-time I wanted to attempt attacking some more difficult target. With it's big community, bug bounties and available source code I went with Linux kernel, which is fairly popular target nowadays (and quite hardened with that). 
 Starting with a lot of reading, I went thorugh gorgeous [course](https://pawnyable.cafe/linux-kernel/) (In japanese, but with translator its easily doable - highly recommend! @ptrYudai is a boss). Another great resource for 
 helping understanding SLUB allocator was [this one](https://sam4k.com/linternals-introduction/). There were of course also tons of other random articles on the internet which I do not remember which supplemented my learning. Having done 
@@ -8,12 +9,12 @@ that, I wanted to dive deep into exploiting some old vulnerabilities. So my goal
 
 The exploitation part did not quite work out, but it was still quite a journey. Aside from attempting to exploit the bug I also went on the lookout what other vulnerabilities could exist there and trying to understand how it all works.
 
-# Target
+## Target
 So I started off with naive strategy of just going to Linux github repository and searching for some keywords like CVE, Use-After-Free, Overflow and similar. One of the commits got my attention, 
 namely [this](https://github.com/torvalds/linux/commit/56b88b50565cd8b946a2d00b0c83927b7ebb055e). It basically has it all: UAF keyword, assigned CVE, relatively new bug and even described path when the issue happens. 
 Not knowing much about various kernel parts, I only knew ALSA has something to do with the sound. Looks like a perfect target, so not thinking much about it I went off with trying to creating some PoC.
 
-# Environment
+## Environment
 First thing to do is build proper version of Linux kernel. We can get any version of kernel we are interested in from github and checkout right before the patch. I went with the route of checking to what existing tags was the patch applied to
 ![image](https://github.com/vido4/Linux-research/assets/5321740/6caaed06-7327-4b3d-bb81-7c5e7c16d71d)
 
@@ -78,7 +79,7 @@ For starters we go with no KASLR - but all of these options can be modified afte
 so more than 1 core is required. `-soundhw` emulates `hda` sound card and `-s` allows us to attach gdb. We are quite generous with 1G RAM but it can be easily lowered (just not too much). 
 Rest of the options is nothing special and is nicely described in `qemu` help. 
 
-# Code exploration
+## Code exploration
 Now that we have stable environment for testing, we need to know how to trigger the vulnerable function - and how it all works. For starters I just went through the ALSA code understanding what can be done there and looking for potential interesting places from security perspective.
 
 Looking at the patch we see functions which are used in this functionality - flow starts with `snd_ctl_ioctl` function and `snd_ctl_ioctl_compat` before reaching vulnerable function.
@@ -403,4 +404,179 @@ static int ctl_elem_read_user(struct snd_card *card,
 
 How can we abuse it then?
 
-## Exploitation attempt
+### Locking
+First of all - why is locking necessary? Kernel functions can be called simultanously by multiple threads or processes and the will be processed concurrently. If we modify some globally accessible data, when it is handled by some other function at the same time, we can subvert functions' expectations. 
+Simple example would be read/write operation on object. We could have read function which performs some initial check on object (if proper index is passed) and if it is true, reads data from internal array at that index. If we can simultanously write to that object. We could bypass this check while writing arbitrary index there.
+```
+  Thread1         Thread2
+ ------------        |	
+ |READ INDEX|        |
+ ------------        |
+      |              v
+      |        -------------
+      |        |WRITE INDEX|
+      |        -------------
+      v              |
+ ------------        |
+ |READ DATA |        v
+ ------------
+
+```
+These operations need to be performed at the exact time relative to each other, so often exploitation of such condition is challenging. 
+
+##Exploitation attempt
+
+So now we need to know what kind of data are we reading, like how is it exactly stored and how can we modify it. The data that is sent to function thorugh `ioctl` syscall is structure `snd_ctl_elem_value32`. Notice `__user` keyword which indicates that data resides in userspace memory.
+```c
+static int snd_ctl_elem_read_user_compat(struct snd_card *card,
+					 struct snd_ctl_elem_value32 __user *data32)
+{
+	return ctl_elem_read_user(card, data32, &data32->value);
+}
+```
+
+Inside that, when performing `ctl_elem_read_user` - the operations are:
+* copy_ctl_value_from_user
+* snd_ctl_elem_read
+* copy_ctl_value_to_user
+
+  Going one by one, let's look at function `copy_ctl_value_from_user`.  It takes `id` from data provided by user, searches for appropriate control using `snd_ctl_find_id` and reads type of data stored in the control. Then all the data is copied from user structure into target control.
+
+Function `snd_ctl_elem_read` gets appropriate control using again `snd_ctl_find_id` and calls functions which will read data with `kctl->get` where `kctl` is our control.
+```c
+...
+	if (!ret)
+		ret = kctl->get(kctl, control);
+...
+```
+
+`copy_ctl_value_to_user` basically copies data from the `kctl` obj into userland, the reverse of `copy_ctl_value_from_user`. 
+
+The easiest way to exploit race condition that we have is creating Use After Free primitive - by freeing target object and performing operation on the freed one. 
+
+There exists a funcitonality of freeing `kcontrols` - by sending command `SNDRV_CTL_IOCTL_ELEM_REPLACE32` to `ioctl`. While we are at it, we can also list all currently available `kcontrols` using command `SNDRV_CTL_IOCTL_ELEM_LIST32`.
+List of `kcontrols` looks like this in my case.
+
+![image](https://github.com/vido4/Linux-research/assets/5321740/d47a9a72-fcef-4690-9491-cbe704704669)
+
+Command `SNDRV_CTL_IOCTL_ELEM_REPLACE32` expects proper structure `snd_ctl_elem_info32` to be sent as a parameter. So we need to replicate them from kernel sources. 
+
+Requires structures are 
+```c
+#define SNDRV_CTL_ELEM_ID_NAME_MAXLEN   44
+#define SNDRV_CTL_ELEM_TYPE_INTEGER64   6 /* 64-bit integer type */
+
+typedef int snd_ctl_elem_iface_t;
+typedef int32_t s32;
+typedef uint32_t u32;
+typedef int64_t s64;
+typedef uint64_t u64;
+
+struct snd_ctl_elem_id {
+    unsigned int numid;         /* numeric identifier, zero = invalid */
+    snd_ctl_elem_iface_t iface; /* interface identifier */
+    unsigned int device;                /* device/client number */
+    unsigned int subdevice;             /* subdevice (substream) number */
+    unsigned char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];          /* ASCII name of item */
+    unsigned int index;         /* index of item */
+};
+
+struct snd_ctl_elem_info32 {
+    struct snd_ctl_elem_id id; // the size of struct is same
+    s32 type;
+    u32 access;
+    u32 count;
+    s32 owner;
+    union {
+        struct {
+            s32 min;
+            s32 max;
+            s32 step;
+        } integer;
+        struct {
+            u64 min;
+            u64 max;
+            u64 step;
+        } integer64;
+        struct {
+            u32 items;          //Number of name items
+            u32 item;
+            char name[64];
+            u64 names_ptr;      //Userland ptr to names table in manner: [NAME\x00NAME\x00...]
+            u32 names_length;  //length of all names buffer, max 64K
+        } enumerated;
+        unsigned char reserved[128];
+    } value;
+    unsigned char reserved[64];
+} __attribute__((packed));
+
+```
+
+From these, we are basically required to fill only fields below
+```c
+struct snd_ctl_elem_info32 userinfo;
+...
+userinfo.owner = 0;
+userinfo.count = 1; //has to be over 0
+userinfo.type = SNDRV_CTL_ELEM_TYPE_INTEGER64; //Simplest type 
+userinfo.id.numid = free_id;
+
+
+sprintf(name, "PWN%04x", free_id);
+strncpy(userinfo.id.name, name, strlen(name) + 1);
+```
+
+However, attempting to call `replace` on any of existing kcontrols yields error. That is because, there is a bit defined for every kcontrol indicating whether it is user space or kernel element
+```c
+#define SNDRV_CTL_ELEM_ACCESS_USER		(1<<29) /* user space element */
+```
+It is then checked when being removed
+```c
+static int snd_ctl_remove_user_ctl(structsnd_ctl_file *file,
+				   structsnd_ctl_elem_id *id)
+{
+	structsnd_card *card =file->card;
+	structsnd_kcontrol *kctl;
+	int idx, ret;
+
+down_write(&card->controls_rwsem);
+kctl = snd_ctl_find_id(card, id);
+	if (kctl == NULL) {
+		ret = -ENOENT;
+		goto error;
+	}
+	if (!(kctl->vd[0].access &SNDRV_CTL_ELEM_ACCESS_USER)) { !!!
+		ret = -EINVAL;
+		goto error;
+	}
+	for (idx = 0; idx < kctl->count; idx++)
+		if (kctl->vd[idx].owner != NULL &&kctl->vd[idx].owner !=file) {
+			ret = -EBUSY;
+			goto error;
+		}
+	ret = snd_ctl_remove(card,kctl);
+error:
+up_write(&card->controls_rwsem);
+	return ret;
+}
+```
+
+Fortunately, we can also create our own kcontrols with command `SNDRV_CTL_IOCTL_ELEM_ADD32`.
+
+That way, when we call replace on it, it will work properly.
+
+While calling replace, the new kcontrol id will be calculated as `card->last_numid + 1` It is annoying to continuously keep track of last id - so we can use other behaviour of function `snd_ctl_find_id`. Whenever `id` is equal to 0, hash is calculated using name and other subfields and is used as a key for searching proper kcontrols. That way, performing read with `id` set to 0 but proper `name` fiels will reach to our `kcontrol` every time!
+
+Combining all these steps above, we can trigger the vulnerability with outlined steps:
+* Create user-controlled kcontrol with `SNDRV_CTL_IOCTL_ELEM_ADD32`
+* Create separate thread that continuously deletes the kcontrol with `SNDRV_CTL_IOCTL_ELEM_REPLACE32`
+* In main thread, continuously read created kcontrol with `SNDRV_CTL_IOCTL_ELEM_READ32`
+
+Because of lack of locking in `SNDRV_CTL_IOCTL_ELEM_READ32` there will be a collision when we deleted the `kcontrol` in the `replace` step, but are reading from it by dereferencing deleted `kcontrol` and calling its `->get()` function. 
+![image](https://github.com/vido4/Linux-research/assets/5321740/7be48931-f7a4-4e90-9a7f-700e6dc4f556)
+
+## What's next?
+
+At this step I wondered how could I stabilize the race. In the setup I've done, it takes at least few seconds until we properly win the race and crash the kernel. At this point, we should spray the kmalloc-heap of the same size with victim objects between when `kcontrol` is created and `read` function is executed. However without any prior leaks and immediate dereferencing of freed pointer, exploitation of this setup seems pretty hard. There are also no reads from userland so we cannot abuse `FUSE` or `userfaultfd` techniques to extend the race window for properly setting up the heap. As it is just an exercise and vulnerability is already fixed, I decided to stop here and take on exploiting some other bugs in kernel.
+
+Code in repo is typical write-and-forget exploit style, so it is low-quality code, hoping it is at least somehow readable. 
