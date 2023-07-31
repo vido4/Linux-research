@@ -1,4 +1,23 @@
 # CVE-2023-0266
+## How to run
+Qemu is required to run these examples, make sure you have it properly installed. 
+
+Then simply run 
+```bash
+run.sh
+```
+If you want to modify exploit - first unpack `cpio` with 
+```bash
+sh unpack.sh
+```
+Then after modifying `poc.c` file run with 
+```bash
+transfer.sh
+```
+It will repack `cpio` filesystem including compiled `poc`
+
+Exploit is located at `/poc` inside the vm.
+
 ## Motivation
 In my off-time I wanted to attempt attacking some more difficult target. With it's big community, bug bounties and available source code I went with Linux kernel, which is fairly popular target nowadays (and quite hardened with that). 
 Starting with a lot of reading, I went thorugh gorgeous [course](https://pawnyable.cafe/linux-kernel/) (In japanese, but with translator its easily doable - highly recommend! @ptrYudai is a boss). Another great resource for 
