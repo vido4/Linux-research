@@ -445,7 +445,7 @@ Simple example would be read/write operation on object. We could have read funct
 ```
 These operations need to be performed at the exact time relative to each other, so often exploitation of such condition is challenging. 
 
-##Exploitation attempt
+## Exploitation attempt
 
 So now we need to know what kind of data are we reading, like how is it exactly stored and how can we modify it. The data that is sent to function thorugh `ioctl` syscall is structure `snd_ctl_elem_value32`. Notice `__user` keyword which indicates that data resides in userspace memory.
 ```c
